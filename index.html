@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="リンク作成">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#ff9900">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>アソシエイトリンク作成</title>
+<style>
+:root{--bg:#f4f4f6;--card:#fff;--text:#1c1c1e;--sub:#6b6b70;--accent:#ff9900;--line:#e2e2e6}
+@media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--text:#f2f2f7;--sub:#9a9aa0;--line:#38383a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:560px;margin:0 auto}
+h1{font-size:20px;margin:8px 0 16px}
+.card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--sub);margin-bottom:6px}
+input,textarea{width:100%;font:inherit;font-size:16px;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+textarea{min-height:84px;resize:vertical}
+.row{display:flex;gap:8px;margin-top:10px}
+button{flex:1;font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px;background:var(--accent);color:#111}
+button.sec{background:var(--bg);color:var(--text);border:1px solid var(--line)}
+#out{word-break:break-all;font-size:14px}
+#msg{font-size:13px;min-height:20px;margin-top:8px;color:var(--sub)}
+#msg.err{color:#d93025}
+ul{list-style:none;margin:0;padding:0}
+li{padding:10px 0;border-top:1px solid var(--line);font-size:13px;word-break:break-all}
+li:first-child{border-top:0}
+li button{margin-top:6px;padding:6px;font-size:13px}
+.hide{display:none}
+small{color:var(--sub)}
+</style>
+</head>
+<body>
+<main>
+<h1>アソシエイトリンク作成</h1>
+
+<div class="card">
+  <label for="tag">アソシエイトID(最初の1回だけ入力)</label>
+  <input id="tag" placeholder="例: yourname-22" autocapitalize="off" autocorrect="off" spellcheck="false">
+</div>
+
+<div class="card">
+  <label for="src">Amazonの商品リンク(複数行OK)</label>
+  <textarea id="src" placeholder="https://www.amazon.co.jp/..." autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  <div class="row">
+    <button class="sec" id="paste">貼り付け</button>
+    <button id="make">リンク作成</button>
+  </div>
+  <div id="msg"></div>
+</div>
+
+<div class="card hide" id="resCard">
+  <label>できたリンク</label>
+  <div id="out"></div>
+  <div class="row">
+    <button id="copy">コピー</button>
+    <button class="sec" id="share">共有</button>
+  </div>
+</div>
+
+<div class="card hide" id="histCard">
+  <label>履歴</label>
+  <ul id="hist"></ul>
+  <div class="row"><button class="sec" id="clear">履歴を消去</button></div>
+</div>
+
+<small>※ amzn.to / amzn.asia の短縮リンクは変換できません。ブラウザで開いて商品ページのURLを使ってください。</small>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+
+// URL(または10桁ASIN単体)から ASIN を取り出す
+function extractAsin(text){
+  const s = text.trim();
+  // 単体入力は B で始まる10桁(通常商品)か ISBN-10(本)だけ許可し、10文字の英単語を誤検出しない
+  if (/^(?:B[A-Z0-9]{9}|\d{9}[\dX])$/i.test(s)) return s.toUpperCase();
+  const m = s.match(/\/(?:dp|gp\/product|gp\/aw\/d|gp\/offer-listing|exec\/obidos\/ASIN|ASIN)\/([A-Z0-9]{10})(?=[/?&#]|$)/i);
+  return m ? m[1].toUpperCase() : null;
+}
+const build = (asin, tag) => `https://www.amazon.co.jp/dp/${asin}/ref=nosim?tag=${encodeURIComponent(tag)}`;
+
+let current = [];
+function setMsg(t, err){ const m = $('msg'); m.textContent = t; m.className = err ? 'err' : ''; }
+
+function make(){
+  const tag = $('tag').value.trim();
+  if (!tag){ setMsg('アソシエイトIDを入力してください', true); return; }
+  store.set('tag', tag);
+  const lines = $('src').value.split(/\s+/).filter(Boolean);
+  if (!lines.length){ setMsg('リンクを貼り付けてください', true); return; }
+  const ok = [], ng = [];
+  for (const l of lines){
+    const a = extractAsin(l);
+    if (a) ok.push(build(a, tag));
+    else ng.push(l);
+  }
+  // 共有テキストの「商品名」などURL以外の語は、1件でも変換できていれば失敗として数えない
+  if (ok.length) ng.splice(0, ng.length, ...ng.filter(l => /^https?:/i.test(l)));
+  current = [...new Set(ok)];
+  if (current.length){
+    $('out').innerHTML = '';
+    current.forEach(u => { const d = document.createElement('div'); d.textContent = u; d.style.marginBottom = '8px'; $('out').appendChild(d); });
+    $('resCard').classList.remove('hide');
+    const h = store.get('hist', []);
+    store.set('hist', [...current, ...h.filter(x => !current.includes(x))].slice(0, 30));
+    renderHist();
+  } else {
+    $('resCard').classList.add('hide');
+  }
+  setMsg(ng.length ? `${ng.length}件は商品番号が見つかりませんでした` : (current.length ? `${current.length}件作成しました` : ''), ng.length > 0);
+}
+
+async function copyText(t){
+  try { await navigator.clipboard.writeText(t); return true; }
+  catch {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch {}
+    ta.remove(); return ok;
+  }
+}
+
+function renderHist(){
+  const h = store.get('hist', []);
+  $('histCard').classList.toggle('hide', !h.length);
+  $('hist').innerHTML = '';
+  h.forEach(u => {
+    const li = document.createElement('li');
+    li.textContent = u;
+    const b = document.createElement('button'); b.className = 'sec'; b.textContent = 'コピー';
+    b.onclick = async () => setMsg(await copyText(u) ? 'コピーしました' : 'コピーに失敗しました', false);
+    li.appendChild(b); $('hist').appendChild(li);
+  });
+}
+
+$('make').onclick = make;
+$('paste').onclick = async () => {
+  try { $('src').value = await navigator.clipboard.readText(); make(); }
+  catch { setMsg('貼り付けできません。入力欄に直接貼り付けてください', true); }
+};
+$('copy').onclick = async () => setMsg(await copyText(current.join('\n')) ? 'コピーしました' : 'コピーに失敗しました', false);
+$('share').onclick = async () => {
+  if (navigator.share) { try { await navigator.share({ text: current.join('\n') }); } catch {} }
+  else setMsg('この環境では共有できません', true);
+};
+$('clear').onclick = () => { store.set('hist', []); renderHist(); };
+
+$('tag').value = store.get('tag', '');
+renderHist();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
